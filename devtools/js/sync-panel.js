@@ -258,21 +258,27 @@ const SyncPanel = {
     const sensitiveKeys = this.getSensitiveKeys();
 
     try {
-      const [collections, mocks, environments] = await Promise.all([
+      const [collections, environments] = await Promise.all([
         App.sendToBackground('GET_COLLECTIONS'),
-        App.sendToBackground('GET_MOCKS'),
         App.sendToBackground('GET_ENVIRONMENTS')
       ]);
 
       const maskedCollections = Utils.maskSensitiveData(collections, sensitiveKeys);
       const maskedEnvs = Utils.maskSensitiveData(environments, sensitiveKeys);
 
-      await Promise.all([
-        App.sendToBackground('SAVE_COLLECTION', maskedCollections[0]),
-        App.sendToBackground('SAVE_ENVIRONMENT', maskedEnvs[0])
-      ]);
+      const savePromises = [];
+      
+      for (const collection of maskedCollections) {
+        savePromises.push(App.sendToBackground('SAVE_COLLECTION', collection));
+      }
+      
+      for (const env of maskedEnvs) {
+        savePromises.push(App.sendToBackground('SAVE_ENVIRONMENT', env));
+      }
+      
+      await Promise.all(savePromises);
 
-      App.showToast('敏感信息已清理');
+      App.showToast('已清理 ' + maskedCollections.length + ' 个集合和 ' + maskedEnvs.length + ' 个环境的敏感信息');
     } catch (e) {
       App.showToast('清理失败: ' + e, 'error');
     }

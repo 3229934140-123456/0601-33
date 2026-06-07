@@ -350,6 +350,17 @@ html, body {
 .method-head { background-color: #6b7280; }
 .method-options { background-color: #06b6d4; }
 
+.mock-badge {
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 600;
+  background-color: #f59e0b;
+  color: white;
+  flex-shrink: 0;
+  text-transform: uppercase;
+}
+
 .status-badge {
   padding: 2px 6px;
   border-radius: 3px;

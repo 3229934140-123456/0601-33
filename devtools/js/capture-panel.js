@@ -99,12 +99,14 @@ const CapturePanel = {
       const statusClass = this.getStatusClass(req.status);
       const isSelected = this.selectedRequest?.id === req.id;
       const urlPath = Utils.getUrlPath(req.url);
+      const mockBadge = req.isMocked ? '<span class="mock-badge" title="Mock 响应">Mock</span>' : '';
 
       return `
         <div class="request-item ${isSelected ? 'selected' : ''}" data-index="${index}" data-id="${req.id}">
           <div class="request-item-header">
             <span class="method-badge ${methodClass}">${req.method || 'GET'}</span>
             <span class="status-badge ${statusClass}">${req.status || 'pending'}</span>
+            ${mockBadge}
             <span class="request-url" title="${App.escapeHtml(req.url)}">${App.escapeHtml(urlPath)}</span>
           </div>
           <div class="request-item-meta">
@@ -214,6 +216,14 @@ const CapturePanel = {
 
       <div class="detail-section" style="padding: 0 16px 16px;">
         <h4>请求信息</h4>
+        ${req.isMocked ? `
+          <div class="detail-row" style="background: #fef3c7; padding: 8px; border-radius: 4px; margin-bottom: 8px;">
+            <span class="detail-label" style="font-weight: 600; color: #92400e;">Mock 响应</span>
+            <span class="detail-value" style="color: #92400e; font-weight: 500;">
+              ${req.mockName ? App.escapeHtml(req.mockName) : '已启用 Mock'}
+            </span>
+          </div>
+        ` : ''}
         <div class="detail-row">
           <span class="detail-label">URL</span>
           <span class="detail-value">${App.escapeHtml(req.url)}</span>
@@ -237,6 +247,10 @@ const CapturePanel = {
         <div class="detail-row">
           <span class="detail-label">响应大小</span>
           <span class="detail-value">${Utils.formatBytes(req.responseSize || 0)}</span>
+        </div>
+        <div class="detail-row">
+          <span class="detail-label">请求类型</span>
+          <span class="detail-value">${req.type || 'fetch'}</span>
         </div>
       </div>
 
@@ -344,8 +358,14 @@ const CapturePanel = {
 
   addToCollection() {
     if (!this.selectedRequest) return;
-    App.switchPanel('docs');
-    App.showToast('请选择或创建集合来保存此接口');
+    App.openSaveToCollectionModal({
+      url: this.selectedRequest.url,
+      method: this.selectedRequest.method,
+      headers: this.selectedRequest.headers || {},
+      requestBody: this.selectedRequest.requestBody,
+      responseBody: this.selectedRequest.responseBody,
+      description: ''
+    });
   },
 
   async toggleFavorite() {

@@ -242,6 +242,143 @@ const App = {
     }, 2000);
   },
 
+  _pendingSaveApi: null,
+
+  async openSaveToCollectionModal(apiData) {
+    this._pendingSaveApi = apiData;
+
+    const modal = document.getElementById('saveToCollectionModal');
+    if (!modal) return;
+
+    try {
+      const collections = await this.sendToBackground('GET_COLLECTIONS');
+      const select = document.getElementById('collectionSelect');
+      if (select) {
+        select.innerHTML = '<option value="">-- 请选择 --</option>' +
+          collections.map(c => `<option value="${c.id}">${this.escapeHtml(c.name)}</option>`).join('');
+      }
+    } catch (e) {
+      console.error('Failed to load collections:', e);
+    }
+
+    const nameInput = document.getElementById('apiNameInput');
+    if (nameInput && apiData) {
+      nameInput.value = apiData.name || Utils.getUrlPath(apiData.url || '') || '';
+    }
+
+    modal.style.display = 'flex';
+
+    this._bindSaveModalEvents();
+  },
+
+  closeSaveToCollectionModal() {
+    const modal = document.getElementById('saveToCollectionModal');
+    if (modal) {
+      modal.style.display = 'none';
+    }
+    this._pendingSaveApi = null;
+  },
+
+  _bindSaveModalEvents() {
+    const closeBtn = document.getElementById('closeSaveModal');
+    if (closeBtn && !closeBtn._bound) {
+      closeBtn.addEventListener('click', () => this.closeSaveToCollectionModal());
+      closeBtn._bound = true;
+    }
+
+    const cancelBtn = document.getElementById('cancelSaveBtn');
+    if (cancelBtn && !cancelBtn._bound) {
+      cancelBtn.addEventListener('click', () => this.closeSaveToCollectionModal());
+      cancelBtn._bound = true;
+    }
+
+    const confirmBtn = document.getElementById('confirmSaveBtn');
+    if (confirmBtn && !confirmBtn._bound) {
+      confirmBtn.addEventListener('click', () => this._confirmSaveToCollection());
+      confirmBtn._bound = true;
+    }
+
+    const modal = document.getElementById('saveToCollectionModal');
+    if (modal && !modal._bound) {
+      modal.addEventListener('click', (e) => {
+        if (e.target === modal) {
+          this.closeSaveToCollectionModal();
+        }
+      });
+      modal._bound = true;
+    }
+  },
+
+  async _confirmSaveToCollection() {
+    if (!this._pendingSaveApi) {
+      this.closeSaveToCollectionModal();
+      return;
+    }
+
+    const collectionId = document.getElementById('collectionSelect')?.value;
+    const newCollectionName = document.getElementById('newCollectionName')?.value?.trim();
+    const apiName = document.getElementById('apiNameInput')?.value?.trim();
+    const saveResponse = document.getElementById('saveResponseExample')?.checked;
+
+    let collection;
+
+    if (newCollectionName) {
+      collection = {
+        id: Utils.generateId(),
+        name: newCollectionName,
+        description: '',
+        apis: [],
+        createdAt: Date.now(),
+        updatedAt: Date.now()
+      };
+    } else if (collectionId) {
+      try {
+        const collections = await this.sendToBackground('GET_COLLECTIONS');
+        collection = collections.find(c => c.id === collectionId);
+        if (!collection) {
+          this.showToast('集合不存在', 'error');
+          return;
+        }
+      } catch (e) {
+        this.showToast('加载集合失败: ' + e, 'error');
+        return;
+      }
+    } else {
+      this.showToast('请选择集合或新建集合', 'error');
+      return;
+    }
+
+    const apiData = this._pendingSaveApi;
+    const newApi = {
+      id: Utils.generateId(),
+      name: apiName || Utils.getUrlPath(apiData.url || '') || '未命名接口',
+      method: apiData.method || 'GET',
+      url: apiData.url || '',
+      description: apiData.description || '',
+      requestHeaders: apiData.headers || apiData.requestHeaders || {},
+      requestBody: apiData.requestBody || apiData.body || null,
+      responseExample: saveResponse ? (apiData.responseBody || apiData.responseExample || null) : null,
+      createdAt: Date.now(),
+      updatedAt: Date.now()
+    };
+
+    collection.apis = collection.apis || [];
+    collection.apis.push(newApi);
+    collection.updatedAt = Date.now();
+
+    try {
+      await this.sendToBackground('SAVE_COLLECTION', collection);
+      this.showToast('已保存到集合');
+      this.closeSaveToCollectionModal();
+
+      if (typeof DocsPanel !== 'undefined' && DocsPanel.loadCollections) {
+        DocsPanel.loadCollections();
+      }
+    } catch (e) {
+      this.showToast('保存失败: ' + e, 'error');
+    }
+  },
+
   formatJson(obj) {
     try {
       return JSON.stringify(obj, null, 2);

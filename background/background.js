@@ -114,6 +114,7 @@ const Background = {
         const savedMock = await Storage.saveMock(payload);
         this.updateMockRules();
         this.broadcastToDevTools('MOCK_UPDATED', savedMock);
+        this.broadcastMockRulesToAllTabs();
         sendResponse({ success: true, data: savedMock });
         break;
       
@@ -121,6 +122,7 @@ const Background = {
         await Storage.deleteMock(payload);
         this.updateMockRules();
         this.broadcastToDevTools('MOCK_DELETED', payload);
+        this.broadcastMockRulesToAllTabs();
         sendResponse({ success: true });
         break;
       
@@ -144,6 +146,9 @@ const Background = {
         await Storage.saveSettings(payload);
         this.settings = { ...this.settings, ...payload };
         this.broadcastToDevTools('SETTINGS_UPDATED', payload);
+        if (typeof payload.mockEnabled !== 'undefined') {
+          this.broadcastMockEnabledToAllTabs(payload.mockEnabled);
+        }
         sendResponse({ success: true });
         break;
       
@@ -456,6 +461,45 @@ const Background = {
         this.mockRules.set(key, mock);
       }
     });
+  },
+
+  async broadcastMockRulesToAllTabs() {
+    try {
+      const mocks = await Storage.getMocks();
+      chrome.tabs.query({}, (tabs) => {
+        tabs.forEach(tab => {
+          if (tab.id) {
+            chrome.tabs.sendMessage(tab.id, {
+              type: 'MOCK_RULES_UPDATED',
+              payload: mocks
+            }).catch(() => {
+              // ignore errors for tabs without content script
+            });
+          }
+        });
+      });
+    } catch (e) {
+      console.warn('Failed to broadcast mock rules:', e);
+    }
+  },
+
+  broadcastMockEnabledToAllTabs(enabled) {
+    try {
+      chrome.tabs.query({}, (tabs) => {
+        tabs.forEach(tab => {
+          if (tab.id) {
+            chrome.tabs.sendMessage(tab.id, {
+              type: 'MOCK_ENABLED_CHANGED',
+              payload: enabled
+            }).catch(() => {
+              // ignore errors for tabs without content script
+            });
+          }
+        });
+      });
+    } catch (e) {
+      console.warn('Failed to broadcast mock enabled:', e);
+    }
   },
 
   checkMockRule(url, method) {

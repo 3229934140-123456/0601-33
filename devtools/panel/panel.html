@@ -533,5 +533,96 @@
   <script src="../js/env-panel.js"></script>
   <script src="../js/history-panel.js"></script>
   <script src="../js/sync-panel.js"></script>
+
+  <div class="modal-overlay" id="saveToCollectionModal" style="display: none;">
+    <div class="modal">
+      <div class="modal-header">
+        <h3>保存到集合</h3>
+        <button class="modal-close" id="closeSaveModal">×</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label class="form-label">选择集合</label>
+          <select class="form-input" id="collectionSelect">
+            <option value="">-- 请选择 --</option>
+          </select>
+        </div>
+        <div style="margin: 12px 0; text-align: center; color: var(--text-tertiary); font-size: 12px;">或者</div>
+        <div class="form-group">
+          <label class="form-label">新建集合</label>
+          <input type="text" class="form-input" id="newCollectionName" placeholder="输入新集合名称">
+        </div>
+        <div class="form-group">
+          <label class="form-label">接口名称</label>
+          <input type="text" class="form-input" id="apiNameInput" placeholder="输入接口名称">
+        </div>
+        <div class="form-group">
+          <label class="form-label">
+            <input type="checkbox" id="saveResponseExample" checked>
+            <span>同时保存响应示例</span>
+          </label>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" id="cancelSaveBtn">取消</button>
+        <button class="btn btn-primary" id="confirmSaveBtn">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <style>
+    .modal-overlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0, 0, 0, 0.5);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 1000;
+    }
+    .modal {
+      background: var(--bg-primary);
+      border-radius: var(--radius-lg);
+      width: 420px;
+      max-width: 90%;
+      box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1);
+    }
+    .modal-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--border-color);
+    }
+    .modal-header h3 {
+      font-size: var(--font-size-lg);
+      font-weight: 600;
+      margin: 0;
+    }
+    .modal-close {
+      background: none;
+      border: none;
+      font-size: 20px;
+      cursor: pointer;
+      color: var(--text-tertiary);
+      padding: 4px 8px;
+    }
+    .modal-close:hover {
+      color: var(--text-primary);
+    }
+    .modal-body {
+      padding: 20px;
+    }
+    .modal-footer {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+      padding: 16px 20px;
+      border-top: 1px solid var(--border-color);
+    }
+  </style>
 </body>
 </html>

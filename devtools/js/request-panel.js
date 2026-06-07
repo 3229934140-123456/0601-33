@@ -7,9 +7,99 @@ const RequestPanel = {
     bodyType: 'none'
   },
   lastResponse: null,
+  currentEnv: null,
+  environments: [],
 
   init() {
     this.bindEvents();
+    this.loadEnvironments();
+  },
+
+  async loadEnvironments() {
+    try {
+      const [envs, currentEnvId] = await Promise.all([
+        App.sendToBackground('GET_ENVIRONMENTS'),
+        App.sendToBackground('GET_CURRENT_ENV')
+      ]);
+      this.environments = envs || [];
+      this.currentEnv = this.environments.find(e => e.id === currentEnvId) || this.environments[0] || null;
+    } catch (e) {
+      console.error('Failed to load environments:', e);
+    }
+  },
+
+  replaceVariables(str) {
+    if (!str || typeof str !== 'string') return str;
+    if (!this.currentEnv || !this.currentEnv.variables) return str;
+
+    let result = str;
+    const variables = this.currentEnv.variables || {};
+    
+    for (const [key, value] of Object.entries(variables)) {
+      const regex = new RegExp(`\\{\\{\\s*${key}\\s*\\}\\}`, 'g');
+      result = result.replace(regex, String(value));
+    }
+    
+    return result;
+  },
+
+  resolveUrl(url) {
+    if (!url) return url;
+    
+    if (url.startsWith('http://') || url.startsWith('https://')) {
+      return this.replaceVariables(url);
+    }
+    
+    if (this.currentEnv && this.currentEnv.baseUrl) {
+      let baseUrl = this.currentEnv.baseUrl;
+      if (baseUrl.endsWith('/') && url.startsWith('/')) {
+        baseUrl = baseUrl.slice(0, -1);
+      } else if (!baseUrl.endsWith('/') && !url.startsWith('/')) {
+        baseUrl = baseUrl + '/';
+      }
+      return this.replaceVariables(baseUrl + url);
+    }
+    
+    return this.replaceVariables(url);
+  },
+
+  buildHeaders() {
+    const headers = {};
+    
+    if (this.currentEnv && this.currentEnv.headers) {
+      for (const [key, value] of Object.entries(this.currentEnv.headers)) {
+        headers[key] = this.replaceVariables(value);
+      }
+    }
+    
+    const userHeaders = this.getHeaders();
+    for (const [key, value] of Object.entries(userHeaders)) {
+      headers[key] = this.replaceVariables(value);
+    }
+    
+    return headers;
+  },
+
+  buildRequestBody() {
+    if (this.currentRequest.bodyType === 'none' || !this.currentRequest.body) {
+      return null;
+    }
+    
+    let body = this.currentRequest.body;
+    
+    if (typeof body === 'string') {
+      body = this.replaceVariables(body);
+    }
+    
+    if (this.currentRequest.bodyType === 'json' && typeof body === 'string') {
+      try {
+        return JSON.parse(body);
+      } catch (e) {
+        return body;
+      }
+    }
+    
+    return body;
   },
 
   bindEvents() {
@@ -148,37 +238,38 @@ const RequestPanel = {
   },
 
   async sendRequest() {
-    const url = this.currentRequest.url?.trim();
-    if (!url) {
+    const rawUrl = this.currentRequest.url?.trim();
+    if (!rawUrl) {
       App.showToast('请输入请求 URL', 'error');
       return;
     }
 
     const method = this.currentRequest.method;
-    const headers = this.getHeaders();
+    const url = this.resolveUrl(rawUrl);
+    const headers = this.buildHeaders();
     const params = this.getParams();
-    let body = null;
+    let body = this.buildRequestBody();
 
-    if (this.currentRequest.bodyType !== 'none' && this.currentRequest.body) {
-      if (this.currentRequest.bodyType === 'json') {
-        try {
-          body = JSON.parse(this.currentRequest.body);
-        } catch (e) {
-          App.showToast('JSON 格式错误', 'error');
-          return;
-        }
-      } else {
-        body = this.currentRequest.body;
+    if (this.currentRequest.bodyType === 'json' && typeof body === 'string' && body.trim()) {
+      try {
+        body = JSON.parse(body);
+      } catch (e) {
+        App.showToast('JSON 格式错误', 'error');
+        return;
       }
     }
 
     let finalUrl = url;
     if (Object.keys(params).length > 0) {
-      const urlObj = new URL(url);
-      for (const [key, value] of Object.entries(params)) {
-        urlObj.searchParams.append(key, value);
+      try {
+        const urlObj = new URL(url);
+        for (const [key, value] of Object.entries(params)) {
+          urlObj.searchParams.append(key, this.replaceVariables(value));
+        }
+        finalUrl = urlObj.toString();
+      } catch (e) {
+        // 如果 URL 不合法，就跳过参数处理
       }
-      finalUrl = urlObj.toString();
     }
 
     try {
@@ -343,8 +434,28 @@ const RequestPanel = {
       App.showToast('请先输入请求 URL', 'error');
       return;
     }
-    App.switchPanel('docs');
-    App.showToast('请选择或创建集合来保存此接口');
+    
+    const headers = this.getHeaders();
+    const params = this.getParams();
+    let fullUrl = url;
+    if (Object.keys(params).length > 0) {
+      try {
+        const urlObj = new URL(url);
+        for (const [key, value] of Object.entries(params)) {
+          urlObj.searchParams.append(key, value);
+        }
+        fullUrl = urlObj.toString();
+      } catch (e) {}
+    }
+    
+    App.openSaveToCollectionModal({
+      url: fullUrl,
+      method: this.currentRequest.method,
+      headers: headers,
+      requestBody: this.currentRequest.bodyType !== 'none' ? this.currentRequest.body : null,
+      responseBody: this.lastResponse ? (this.lastResponse.body || this.lastResponse.responseBody) : null,
+      description: ''
+    });
   },
 
   loadRequest(request) {
