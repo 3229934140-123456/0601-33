@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>API Debugger</title>
+  <link rel="stylesheet" href="../devtools/css/style.css">
+  <style>
+    body {
+      width: 320px;
+      min-height: 400px;
+      margin: 0;
+      padding: 0;
+    }
+    
+    .popup-container {
+      padding: 16px;
+    }
+    
+    .popup-header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 16px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid var(--border-color);
+    }
+    
+    .popup-header h1 {
+      font-size: 16px;
+      font-weight: 600;
+      margin: 0;
+    }
+    
+    .popup-header svg {
+      color: var(--primary-color);
+    }
+    
+    .popup-section {
+      margin-bottom: 16px;
+    }
+    
+    .popup-section-title {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-secondary);
+      text-transform: uppercase;
+      margin-bottom: 8px;
+      letter-spacing: 0.5px;
+    }
+    
+    .env-selector {
+      width: 100%;
+      padding: 8px 10px;
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-sm);
+      background-color: var(--bg-primary);
+      color: var(--text-primary);
+      font-size: 13px;
+      cursor: pointer;
+    }
+    
+    .quick-actions {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+    
+    .quick-action {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 6px;
+      padding: 12px 8px;
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-md);
+      background-color: var(--bg-primary);
+      cursor: pointer;
+      transition: all 0.2s;
+      font-size: 12px;
+      color: var(--text-secondary);
+    }
+    
+    .quick-action:hover {
+      background-color: var(--bg-hover);
+      border-color: var(--primary-color);
+      color: var(--primary-color);
+    }
+    
+    .quick-action svg {
+      width: 20px;
+      height: 20px;
+    }
+    
+    .stats-card {
+      display: flex;
+      justify-content: space-around;
+      padding: 12px;
+      background-color: var(--bg-secondary);
+      border-radius: var(--radius-md);
+    }
+    
+    .stat-item {
+      text-align: center;
+    }
+    
+    .stat-value {
+      font-size: 20px;
+      font-weight: 600;
+      color: var(--primary-color);
+    }
+    
+    .stat-label {
+      font-size: 11px;
+      color: var(--text-tertiary);
+      margin-top: 2px;
+    }
+    
+    .toggle-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 0;
+    }
+    
+    .toggle-label {
+      font-size: 13px;
+      color: var(--text-primary);
+    }
+    
+    .toggle-switch {
+      position: relative;
+      width: 36px;
+      height: 20px;
+      background-color: var(--border-color);
+      border-radius: 10px;
+      cursor: pointer;
+      transition: background-color 0.2s;
+    }
+    
+    .toggle-switch.active {
+      background-color: var(--success-color);
+    }
+    
+    .toggle-switch::after {
+      content: '';
+      position: absolute;
+      top: 2px;
+      left: 2px;
+      width: 16px;
+      height: 16px;
+      background-color: white;
+      border-radius: 50%;
+      transition: transform 0.2s;
+    }
+    
+    .toggle-switch.active::after {
+      transform: translateX(16px);
+    }
+    
+    .open-devtools {
+      width: 100%;
+      padding: 10px;
+      margin-top: 8px;
+      background-color: var(--primary-color);
+      color: white;
+      border: none;
+      border-radius: var(--radius-md);
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background-color 0.2s;
+    }
+    
+    .open-devtools:hover {
+      background-color: var(--primary-hover);
+    }
+  </style>
+</head>
+<body>
+  <div class="popup-container">
+    <div class="popup-header">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z"/>
+      </svg>
+      <h1>API Debugger</h1>
+    </div>
+
+    <div class="popup-section">
+      <div class="popup-section-title">当前环境</div>
+      <select class="env-selector" id="envSelector">
+        <option value="">加载中...</option>
+      </select>
+    </div>
+
+    <div class="popup-section">
+      <div class="popup-section-title">今日统计</div>
+      <div class="stats-card">
+        <div class="stat-item">
+          <div class="stat-value" id="requestCount">0</div>
+          <div class="stat-label">请求数</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-value" id="successRate">-</div>
+          <div class="stat-label">成功率</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-value" id="avgTime">-</div>
+          <div class="stat-label">平均耗时</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="popup-section">
+      <div class="popup-section-title">快捷开关</div>
+      <div class="toggle-row">
+        <span class="toggle-label">自动捕获请求</span>
+        <div class="toggle-switch active" id="captureToggle"></div>
+      </div>
+      <div class="toggle-row">
+        <span class="toggle-label">Mock 功能</span>
+        <div class="toggle-switch" id="mockToggle"></div>
+      </div>
+    </div>
+
+    <div class="popup-section">
+      <div class="popup-section-title">快捷操作</div>
+      <div class="quick-actions">
+        <div class="quick-action" id="clearAction">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="3 6 5 6 21 6"/>
+            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+          </svg>
+          <span>清空记录</span>
+        </div>
+        <div class="quick-action" id="exportAction">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+            <polyline points="7 10 12 15 17 10"/>
+            <line x1="12" y1="15" x2="12" y2="3"/>
+          </svg>
+          <span>导出数据</span>
+        </div>
+        <div class="quick-action" id="favoritesAction">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>
+          </svg>
+          <span>我的收藏</span>
+        </div>
+        <div class="quick-action" id="syncAction">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="23 4 23 10 17 10"/>
+            <polyline points="1 20 1 14 7 14"/>
+            <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+          </svg>
+          <span>同步数据</span>
+        </div>
+      </div>
+    </div>
+
+    <button class="open-devtools" id="openDevtoolsBtn">打开接口调试面板</button>
+  </div>
+
+  <script src="../shared/utils.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>
