@@ -397,6 +397,10 @@ const App = {
   },
 
   renderJson(data) {
+    return this.renderJsonTree(data, true);
+  },
+
+  renderJsonTree(data, expanded = false, level = 0) {
     if (data === null || data === undefined) {
       return '<span class="json-null">null</span>';
     }
@@ -416,22 +420,59 @@ const App = {
     }
 
     if (type === 'object') {
+      const treeId = 'jstree_' + Math.random().toString(36).substr(2, 9);
+
       if (Array.isArray(data)) {
         if (data.length === 0) return '[]';
-        const items = data.map(item => this.renderJson(item)).join(', ');
-        return `[ ${items} ]`;
+        const items = data.map(item => {
+          return `<div class="json-tree-item">${this.renderJsonTree(item, expanded, level + 1)}</div>`;
+        }).join('');
+        const isOpen = expanded ? 'open' : '';
+        return `
+          <div class="json-tree ${isOpen}" data-tree="${treeId}">
+            <span class="json-tree-toggle" onclick="App.toggleJsonTree(this)">▶</span>
+            <span class="json-array-bracket">[</span>
+            <span class="json-array-count">${data.length} items</span>
+            <div class="json-tree-children">
+              ${items}
+            </div>
+            <span class="json-array-bracket">]</span>
+          </div>
+        `;
       } else {
         const keys = Object.keys(data);
         if (keys.length === 0) return '{}';
         const items = keys.map(key => {
-          return `<span class="json-key">"${this.escapeHtml(key)}"</span>: ${this.renderJson(data[key])}`;
-        }).join(', ');
-        return `{ ${items} }`;
+          return `
+            <div class="json-tree-item">
+              <span class="json-key">"${this.escapeHtml(key)}"</span>: ${this.renderJsonTree(data[key], expanded, level + 1)}
+            </div>
+          `;
+        }).join('');
+        const isOpen = expanded ? 'open' : '';
+        return `
+          <div class="json-tree ${isOpen}" data-tree="${treeId}">
+            <span class="json-tree-toggle" onclick="App.toggleJsonTree(this)">▶</span>
+            <span class="json-object-brace">{</span>
+            <span class="json-object-count">${keys.length} keys</span>
+            <div class="json-tree-children">
+              ${items}
+            </div>
+            <span class="json-object-brace">}</span>
+          </div>
+        `;
       }
     }
 
     return this.escapeHtml(String(data));
-  }
+  },
+
+  toggleJsonTree(el) {
+    const tree = el.parentElement;
+    if (tree) {
+      tree.classList.toggle('open');
+    }
+  },
 };
 
 function initPanel() {

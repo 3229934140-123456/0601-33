@@ -150,11 +150,16 @@ const CapturePanel = {
     const req = this.selectedRequest;
     const urlPath = Utils.getUrlPath(req.url);
     const domain = Utils.getUrlDomain(req.url);
+    const queryParams = Utils.parseQueryParams(req.url);
+    const reqCookie = req.headers?.Cookie || req.headers?.cookie || '';
+    const reqCookies = Utils.parseCookieHeader(reqCookie);
+    const resContentType = req.responseHeaders?.['content-type'] || req.responseHeaders?.['Content-Type'] || '';
+    const contentTypeInfo = Utils.parseContentType(resContentType);
 
     let requestBodyHtml = '';
     if (req.requestBody) {
       if (typeof req.requestBody === 'object') {
-        requestBodyHtml = `<div class="json-viewer">${App.renderJson(req.requestBody)}</div>`;
+        requestBodyHtml = `<div class="json-viewer">${App.renderJsonTree(req.requestBody, true)}</div>`;
       } else {
         requestBodyHtml = `<div class="json-viewer">${App.escapeHtml(String(req.requestBody))}</div>`;
       }
@@ -165,7 +170,12 @@ const CapturePanel = {
     let responseBodyHtml = '';
     if (req.responseBody) {
       if (typeof req.responseBody === 'object') {
-        responseBodyHtml = `<div class="json-viewer">${App.renderJson(req.responseBody)}</div>`;
+        responseBodyHtml = `
+          <div style="margin-bottom: 8px; display: flex; gap: 8px; align-items: center;">
+            <button class="action-btn" style="padding: 4px 8px; font-size: 11px;" onclick="CapturePanel.toggleAllJson(this)">展开/折叠全部</button>
+          </div>
+          <div class="json-viewer">${App.renderJsonTree(req.responseBody, true)}</div>
+        `;
       } else {
         responseBodyHtml = `<div class="json-viewer">${App.escapeHtml(String(req.responseBody))}</div>`;
       }
@@ -175,6 +185,42 @@ const CapturePanel = {
 
     const requestHeadersHtml = this.renderHeaders(req.headers);
     const responseHeadersHtml = this.renderHeaders(req.responseHeaders);
+
+    const queryParamsHtml = Object.keys(queryParams).length > 0
+      ? this.renderKeyValuePairs(queryParams)
+      : '<p style="color: var(--text-tertiary); font-size: var(--font-size-sm);">无 Query 参数</p>';
+
+    const cookieHtml = Object.keys(reqCookies).length > 0
+      ? this.renderKeyValuePairs(reqCookies)
+      : '<p style="color: var(--text-tertiary); font-size: var(--font-size-sm);">无 Cookie</p>';
+
+    const contentTypeHtml = contentTypeInfo
+      ? `<div class="detail-row"><span class="detail-label">MIME 类型</span><span class="detail-value">${contentTypeInfo.mimeType || '-'}</span></div>`
+      : '';
+    const charsetHtml = contentTypeInfo?.params?.charset
+      ? `<div class="detail-row"><span class="detail-label">字符编码</span><span class="detail-value">${contentTypeInfo.params.charset}</span></div>`
+      : '';
+    const boundaryHtml = contentTypeInfo?.params?.boundary
+      ? `<div class="detail-row"><span class="detail-label">Boundary</span><span class="detail-value">${contentTypeInfo.params.boundary}</span></div>`
+      : '';
+
+    const mockInfoHtml = req.isMocked
+      ? `
+        <div class="detail-row" style="background: #fef3c7; padding: 8px; border-radius: 4px; margin-bottom: 8px;">
+          <span class="detail-label" style="font-weight: 600; color: #92400e;">Mock 响应</span>
+          <span class="detail-value" style="color: #92400e; font-weight: 500;">
+            ${req.mockName ? App.escapeHtml(req.mockName) : '已启用 Mock'}
+          </span>
+        </div>
+      ` : '';
+
+    const sourceLabel = req.type === 'replay' ? '重放请求' : (req.type === 'xhr' ? 'XHR' : 'Fetch');
+    const sourceHtml = `
+      <div class="detail-row">
+        <span class="detail-label">来源</span>
+        <span class="detail-value">${sourceLabel}</span>
+      </div>
+    `;
 
     detailEl.innerHTML = `
       <div class="detail-actions">
@@ -193,13 +239,19 @@ const CapturePanel = {
           </svg>
           复制 cURL
         </button>
-        <button class="action-btn" onclick="CapturePanel.copyResponse()">
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
-            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
-          </svg>
-          复制响应
-        </button>
+        <div class="detail-actions-dropdown">
+          <button class="action-btn" onclick="CapturePanel.toggleCopyDropdown(event)">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+            </svg>
+            复制响应 ▾
+          </button>
+          <div class="detail-actions-dropdown-menu" id="copyResponseDropdown">
+            <div class="dropdown-item" onclick="CapturePanel.copyResponse('raw')">原始文本</div>
+            <div class="dropdown-item" onclick="CapturePanel.copyResponse('pretty')">格式化 JSON</div>
+          </div>
+        </div>
         <button class="action-btn" onclick="CapturePanel.addToCollection()">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/>
@@ -216,14 +268,7 @@ const CapturePanel = {
 
       <div class="detail-section" style="padding: 0 16px 16px;">
         <h4>请求信息</h4>
-        ${req.isMocked ? `
-          <div class="detail-row" style="background: #fef3c7; padding: 8px; border-radius: 4px; margin-bottom: 8px;">
-            <span class="detail-label" style="font-weight: 600; color: #92400e;">Mock 响应</span>
-            <span class="detail-value" style="color: #92400e; font-weight: 500;">
-              ${req.mockName ? App.escapeHtml(req.mockName) : '已启用 Mock'}
-            </span>
-          </div>
-        ` : ''}
+        ${mockInfoHtml}
         <div class="detail-row">
           <span class="detail-label">URL</span>
           <span class="detail-value">${App.escapeHtml(req.url)}</span>
@@ -248,21 +293,74 @@ const CapturePanel = {
           <span class="detail-label">响应大小</span>
           <span class="detail-value">${Utils.formatBytes(req.responseSize || 0)}</span>
         </div>
+        ${sourceHtml}
+        ${contentTypeHtml}
+        ${charsetHtml}
+        ${boundaryHtml}
         <div class="detail-row">
-          <span class="detail-label">请求类型</span>
-          <span class="detail-value">${req.type || 'fetch'}</span>
+          <span class="detail-label">请求时间</span>
+          <span class="detail-value">${Utils.formatTime(req.startTime || Date.now())}</span>
         </div>
       </div>
 
       <div class="detail-tabs">
-        <div class="detail-tab active" data-tab="req-headers">请求头</div>
+        <div class="detail-tab active" data-tab="overview">概览</div>
+        <div class="detail-tab" data-tab="query">Query 参数</div>
+        <div class="detail-tab" data-tab="req-headers">请求头</div>
+        <div class="detail-tab" data-tab="cookies">Cookie</div>
         <div class="detail-tab" data-tab="req-body">请求体</div>
         <div class="detail-tab" data-tab="res-headers">响应头</div>
         <div class="detail-tab" data-tab="res-body">响应体</div>
       </div>
 
-      <div class="detail-tab-content active" id="detail-req-headers">
+      <div class="detail-tab-content active" id="detail-overview">
+        <div class="detail-section" style="padding: 12px 16px;">
+          <h4 style="margin-bottom: 12px;">请求摘要</h4>
+          <div class="detail-row">
+            <span class="detail-label">URL</span>
+            <span class="detail-value" style="word-break: break-all;">${App.escapeHtml(req.url)}</span>
+          </div>
+          <div class="detail-row">
+            <span class="detail-label">方法</span>
+            <span class="detail-value"><span class="method-badge method-${req.method?.toLowerCase()}">${req.method || 'GET'}</span></span>
+          </div>
+          <div class="detail-row">
+            <span class="detail-label">Query 参数</span>
+            <span class="detail-value">${Object.keys(queryParams).length} 个</span>
+          </div>
+          <div class="detail-row">
+            <span class="detail-label">请求头</span>
+            <span class="detail-value">${Object.keys(req.headers || {}).length} 个</span>
+          </div>
+          <div class="detail-row">
+            <span class="detail-label">响应头</span>
+            <span class="detail-value">${Object.keys(req.responseHeaders || {}).length} 个</span>
+          </div>
+          <div class="detail-row">
+            <span class="detail-label">Cookie</span>
+            <span class="detail-value">${Object.keys(reqCookies).length} 个</span>
+          </div>
+          ${req.isMocked ? `
+            <div class="detail-row">
+              <span class="detail-label">Mock 规则</span>
+              <span class="detail-value" style="color: #d97706; font-weight: 500;">
+                ${req.mockName ? App.escapeHtml(req.mockName) : '已命中'}
+              </span>
+            </div>
+          ` : ''}
+        </div>
+      </div>
+
+      <div class="detail-tab-content" id="detail-query">
+        ${queryParamsHtml}
+      </div>
+
+      <div class="detail-tab-content" id="detail-req-headers">
         ${requestHeadersHtml}
+      </div>
+
+      <div class="detail-tab-content" id="detail-cookies">
+        ${cookieHtml}
       </div>
 
       <div class="detail-tab-content" id="detail-req-body">
@@ -288,6 +386,26 @@ const CapturePanel = {
         });
       });
     });
+  },
+
+  renderKeyValuePairs(obj) {
+    if (!obj || Object.keys(obj).length === 0) {
+      return '';
+    }
+    return Object.entries(obj).map(([key, value]) => `
+      <div class="detail-row">
+        <span class="detail-label">${App.escapeHtml(key)}</span>
+        <span class="detail-value">${App.escapeHtml(String(value))}</span>
+      </div>
+    `).join('');
+  },
+
+  toggleCopyDropdown(event) {
+    event.stopPropagation();
+    const dropdown = document.getElementById('copyResponseDropdown');
+    if (dropdown) {
+      dropdown.classList.toggle('show');
+    }
   },
 
   renderHeaders(headers) {
@@ -341,19 +459,55 @@ const CapturePanel = {
     }
   },
 
-  async copyResponse() {
+  async copyResponse(format = 'pretty') {
     if (!this.selectedRequest || !this.selectedRequest.responseBody) return;
 
     try {
-      const responseText = typeof this.selectedRequest.responseBody === 'string'
-        ? this.selectedRequest.responseBody
-        : JSON.stringify(this.selectedRequest.responseBody, null, 2);
-      
+      const respBody = this.selectedRequest.responseBody;
+      let responseText;
+
+      if (format === 'raw') {
+        if (typeof respBody === 'string') {
+          responseText = respBody;
+        } else {
+          responseText = JSON.stringify(respBody);
+        }
+      } else {
+        if (typeof respBody === 'string') {
+          try {
+            responseText = JSON.stringify(JSON.parse(respBody), null, 2);
+          } catch (e) {
+            responseText = respBody;
+          }
+        } else {
+          responseText = JSON.stringify(respBody, null, 2);
+        }
+      }
+
       await Utils.copyToClipboard(responseText);
       App.showToast('响应已复制到剪贴板');
+
+      const dropdown = document.getElementById('copyResponseDropdown');
+      if (dropdown) dropdown.classList.remove('show');
     } catch (e) {
       App.showToast('复制失败: ' + e, 'error');
     }
+  },
+
+  toggleAllJson(btn) {
+    const detailEl = document.getElementById('requestDetail');
+    if (!detailEl) return;
+
+    const trees = detailEl.querySelectorAll('.json-tree');
+    const hasClosed = Array.from(trees).some(t => !t.classList.contains('open'));
+
+    trees.forEach(tree => {
+      if (hasClosed) {
+        tree.classList.add('open');
+      } else {
+        tree.classList.remove('open');
+      }
+    });
   },
 
   addToCollection() {

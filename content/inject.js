@@ -53,7 +53,43 @@
     }
   };
 
-  var _findMockRule = function(url, method) {
+  var _findMockRule = function(url, method, requestInfo) {
+    if (!_mockState.isMockEnabled || !_mockState.mockRules || _mockState.mockRules.length === 0) {
+      return null;
+    }
+    var fullUrl = _resolveUrl(url);
+    var info = requestInfo || {};
+    if (!info.query) {
+      info.query = _parseQueryParams(fullUrl);
+    }
+
+    var matchedRules = [];
+
+    for (var i = 0; i < _mockState.mockRules.length; i++) {
+      var mock = _mockState.mockRules[i];
+      if (!mock.enabled) continue;
+      if (mock.method && mock.method.toUpperCase() !== method.toUpperCase()) continue;
+      if (!(_matchUrlPattern(fullUrl, mock.urlPattern) || _matchUrlPattern(url, mock.urlPattern))) continue;
+
+      if (_checkMockConditions(mock, info)) {
+        var conditionCount = 0;
+        if (mock.matchQuery) conditionCount += Object.keys(mock.matchQuery).length;
+        if (mock.matchHeaders) conditionCount += Object.keys(mock.matchHeaders).length;
+        if (mock.matchBody) conditionCount += Object.keys(mock.matchBody).length;
+        matchedRules.push({ rule: mock, priority: conditionCount, index: i });
+      }
+    }
+
+    if (matchedRules.length === 0) return null;
+
+    matchedRules.sort(function(a, b) {
+      if (b.priority !== a.priority) return b.priority - a.priority;
+      return a.index - b.index;
+    });
+    return matchedRules[0].rule;
+  };
+
+  var _findMockRuleBasic = function(url, method) {
     if (!_mockState.isMockEnabled || !_mockState.mockRules || _mockState.mockRules.length === 0) {
       return null;
     }
@@ -95,13 +131,22 @@
     return lines.join('\r\n');
   };
 
-  var _createMockResponse = function(mock) {
+  var _createMockResponse = function(mock, requestInfo) {
     var status = mock.statusCode || 200;
     var statusText = mock.statusText || 'OK';
-    var headers = mock.responseHeaders || { 'Content-Type': 'application/json' };
-    var body = typeof mock.responseBody === 'string'
+    var rawHeaders = mock.responseHeaders || { 'Content-Type': 'application/json' };
+    var rawBody = typeof mock.responseBody === 'string'
       ? mock.responseBody
       : JSON.stringify(mock.responseBody || {});
+
+    var headers = {};
+    for (var hk in rawHeaders) {
+      if (Object.prototype.hasOwnProperty.call(rawHeaders, hk)) {
+        headers[hk] = _renderMockTemplate(rawHeaders[hk], requestInfo);
+      }
+    }
+
+    var body = _renderMockTemplate(rawBody, requestInfo);
 
     return {
       status: status,
@@ -146,6 +191,178 @@
       }
     }
     return headers;
+  };
+
+  var _parseQueryParams = function(url) {
+    var params = {};
+    try {
+      var u = new URL(url, _pageOrigin);
+      u.searchParams.forEach(function(value, key) {
+        if (params[key] !== undefined) {
+          if (Array.isArray(params[key])) {
+            params[key].push(value);
+          } else {
+            params[key] = [params[key], value];
+          }
+        } else {
+          params[key] = value;
+        }
+      });
+    } catch (e) {}
+    return params;
+  };
+
+  var _parseJsonSafe = function(str) {
+    try {
+      return JSON.parse(str);
+    } catch (e) {
+      return null;
+    }
+  };
+
+  var _getNestedValue = function(obj, path) {
+    if (!obj || !path) return undefined;
+    var parts = path.split('.');
+    var current = obj;
+    for (var i = 0; i < parts.length; i++) {
+      if (current === null || current === undefined) return undefined;
+      if (typeof current === 'object') {
+        var part = parts[i];
+        var lowerKey = null;
+        var keys = Object.keys(current);
+        for (var j = 0; j < keys.length; j++) {
+          if (keys[j].toLowerCase() === part.toLowerCase()) {
+            lowerKey = keys[j];
+            break;
+          }
+        }
+        current = lowerKey ? current[lowerKey] : undefined;
+      } else {
+        return undefined;
+      }
+    }
+    return current;
+  };
+
+  var _matchConditions = function(conditions, actual) {
+    if (!conditions || Object.keys(conditions).length === 0) return true;
+    if (!actual) return false;
+
+    for (var key in conditions) {
+      if (!Object.prototype.hasOwnProperty.call(conditions, key)) continue;
+      var expected = conditions[key];
+      var actualVal = _getNestedValue(actual, key);
+      if (actualVal === undefined) return false;
+      if (expected !== '*' && String(actualVal) !== String(expected)) return false;
+    }
+    return true;
+  };
+
+  var _checkMockConditions = function(mock, requestInfo) {
+    if (!mock) return false;
+
+    if (mock.matchQuery && Object.keys(mock.matchQuery).length > 0) {
+      if (!_matchConditions(mock.matchQuery, requestInfo.query)) return false;
+    }
+
+    if (mock.matchHeaders && Object.keys(mock.matchHeaders).length > 0) {
+      if (!_matchConditions(mock.matchHeaders, requestInfo.headers)) return false;
+    }
+
+    if (mock.matchBody && Object.keys(mock.matchBody).length > 0) {
+      var bodyObj = requestInfo.body;
+      if (typeof bodyObj === 'string') {
+        bodyObj = _parseJsonSafe(bodyObj);
+      }
+      if (!_matchConditions(mock.matchBody, bodyObj)) return false;
+    }
+
+    return true;
+  };
+
+  var _renderMockTemplate = function(template, context) {
+    if (!template || typeof template !== 'string') return template;
+
+    var ctx = context || {};
+    var query = ctx.query || {};
+    var headers = ctx.headers || {};
+    var body = ctx.body || {};
+
+    var result = template;
+
+    result = result.replace(/\{\{\s*\$timestamp\s*\}\}/g, function() {
+      return Math.floor(Date.now() / 1000).toString();
+    });
+    result = result.replace(/\{\{\s*\$now\s*\}\}/g, function() {
+      return new Date().toISOString();
+    });
+    result = result.replace(/\{\{\s*\$randomId\s*\}\}/g, function() {
+      return Date.now().toString(36) + Math.random().toString(36).substr(2, 9);
+    });
+    result = result.replace(/\{\{\s*\$random\((\d+)\)\s*\}\}/g, function(_, digits) {
+      var len = parseInt(digits) || 6;
+      var num = '';
+      for (var i = 0; i < len; i++) {
+        num += Math.floor(Math.random() * 10);
+      }
+      return num;
+    });
+    result = result.replace(/\{\{\s*\$uuid\s*\}\}/g, function() {
+      return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+        var r = Math.random() * 16 | 0;
+        var v = c === 'x' ? r : (r & 0x3 | 0x8);
+        return v.toString(16);
+      });
+    });
+
+    result = result.replace(/\{\{\s*query\.([\w.]+)\s*\}\}/g, function(_, key) {
+      var val = _getNestedValue(query, key);
+      return val !== undefined ? String(val) : '';
+    });
+
+    result = result.replace(/\{\{\s*header\.([\w.]+)\s*\}\}/gi, function(_, key) {
+      var val = _getNestedValue(headers, key);
+      return val !== undefined ? String(val) : '';
+    });
+
+    result = result.replace(/\{\{\s*body\.([\w.]+)\s*\}\}/g, function(_, key) {
+      var val = _getNestedValue(body, key);
+      return val !== undefined ? String(val) : '';
+    });
+
+    return result;
+  };
+
+  var _applyMockVariables = function(mockData, requestInfo) {
+    var context = {
+      query: requestInfo.query || {},
+      headers: requestInfo.headers || {},
+      body: requestInfo.body || {}
+    };
+
+    var result = {
+      status: mockData.status,
+      statusText: mockData.statusText,
+      delay: mockData.delay,
+      isMocked: true,
+      mockId: mockData.mockId,
+      mockName: mockData.mockName,
+      headers: {},
+      body: mockData.body
+    };
+
+    var origHeaders = mockData.headers || {};
+    for (var hk in origHeaders) {
+      if (Object.prototype.hasOwnProperty.call(origHeaders, hk)) {
+        result.headers[hk] = _renderMockTemplate(origHeaders[hk], context);
+      }
+    }
+
+    if (typeof mockData.body === 'string') {
+      result.body = _renderMockTemplate(mockData.body, context);
+    }
+
+    return result;
   };
 
   var _interceptXHR = function() {
@@ -253,7 +470,6 @@
 
       var _runMock = function() {
         _isMockMode = true;
-        _setMockReadyState(1);
 
         setTimeout(function() {
           _setMockReadyState(2);
@@ -277,10 +493,10 @@
         requestData.method = _method;
         requestData.url = _url;
 
-        mockRule = _findMockRule(_url, _method);
-        if (mockRule) {
-          mockData = _createMockResponse(mockRule);
-          requestData.startTime = Date.now();
+        var basicMatch = _findMockRuleBasic(_url, _method);
+        if (basicMatch) {
+          _isMockMode = true;
+          _setMockReadyState(1);
           return;
         }
 
@@ -289,7 +505,7 @@
 
       xhr.setRequestHeader = function(name, value) {
         requestData.headers[name] = value;
-        if (mockRule) return;
+        if (_isMockMode) return;
         return nativeXhr.setRequestHeader.apply(nativeXhr, arguments);
       };
 
@@ -318,8 +534,23 @@
           }
         }
 
-        if (mockRule) {
-          _runMock();
+        if (_isMockMode) {
+          var requestInfo = {
+            query: _parseQueryParams(_url),
+            headers: requestData.headers,
+            body: requestData.requestBody
+          };
+
+          mockRule = _findMockRule(_url, _method, requestInfo);
+          if (!mockRule) {
+            mockRule = _findMockRuleBasic(_url, _method);
+          }
+
+          if (mockRule) {
+            mockData = _createMockResponse(mockRule, requestInfo);
+            requestData.startTime = Date.now();
+            _runMock();
+          }
           return;
         }
 
@@ -381,7 +612,7 @@
       };
 
       xhr.abort = function() {
-        if (mockRule) {
+        if (_isMockMode) {
           _mockReadyState = 0;
           _mockStatus = 0;
           _fireEvent('abort');
@@ -392,21 +623,21 @@
       };
 
       xhr.getAllResponseHeaders = function() {
-        if (mockRule && _mockReadyState >= 2) {
+        if (_isMockMode && _mockReadyState >= 2) {
           return _mockResponseHeadersStr;
         }
         return nativeXhr.getAllResponseHeaders.apply(nativeXhr, arguments);
       };
 
       xhr.getResponseHeader = function(name) {
-        if (mockRule && _mockReadyState >= 2) {
+        if (_isMockMode && _mockReadyState >= 2) {
           return _getHeaderCaseInsensitive(_mockResponseHeaders, name);
         }
         return nativeXhr.getResponseHeader.apply(nativeXhr, arguments);
       };
 
       xhr.overrideMimeType = function(mimetype) {
-        if (mockRule) return;
+        if (_isMockMode) return;
         return nativeXhr.overrideMimeType.apply(nativeXhr, arguments);
       };
 
@@ -417,7 +648,7 @@
         if (_listeners[type].indexOf(listener) === -1) {
           _listeners[type].push(listener);
         }
-        if (mockRule) return;
+        if (_isMockMode) return;
         return nativeXhr.addEventListener.apply(nativeXhr, arguments);
       };
 
@@ -428,13 +659,13 @@
             _listeners[type].splice(idx, 1);
           }
         }
-        if (mockRule) return;
+        if (_isMockMode) return;
         return nativeXhr.removeEventListener.apply(nativeXhr, arguments);
       };
 
       Object.defineProperty(xhr, 'readyState', {
         get: function() {
-          if (mockRule) return _mockReadyState;
+          if (_isMockMode) return _mockReadyState;
           return nativeXhr.readyState;
         },
         configurable: true
@@ -442,7 +673,7 @@
 
       Object.defineProperty(xhr, 'status', {
         get: function() {
-          if (mockRule && _mockReadyState >= 2) return _mockStatus;
+          if (_isMockMode && _mockReadyState >= 2) return _mockStatus;
           return nativeXhr.status;
         },
         configurable: true
@@ -450,7 +681,7 @@
 
       Object.defineProperty(xhr, 'statusText', {
         get: function() {
-          if (mockRule && _mockReadyState >= 2) return _mockStatusText;
+          if (_isMockMode && _mockReadyState >= 2) return _mockStatusText;
           return nativeXhr.statusText;
         },
         configurable: true
@@ -458,7 +689,7 @@
 
       Object.defineProperty(xhr, 'responseText', {
         get: function() {
-          if (mockRule && _mockReadyState >= 3) return _mockResponseText;
+          if (_isMockMode && _mockReadyState >= 3) return _mockResponseText;
           return nativeXhr.responseText;
         },
         configurable: true
@@ -466,7 +697,7 @@
 
       Object.defineProperty(xhr, 'response', {
         get: function() {
-          if (mockRule && _mockReadyState >= 3) {
+          if (_isMockMode && _mockReadyState >= 3) {
             return _mockResponse !== null ? _mockResponse : _mockResponseText;
           }
           return nativeXhr.response;
@@ -476,12 +707,12 @@
 
       Object.defineProperty(xhr, 'responseType', {
         get: function() {
-          if (mockRule) return _responseType;
+          if (_isMockMode) return _responseType;
           return nativeXhr.responseType;
         },
         set: function(value) {
           _responseType = value;
-          if (!mockRule) {
+          if (!_isMockMode) {
             try { nativeXhr.responseType = value; } catch (e) {}
           }
         },
@@ -490,7 +721,7 @@
 
       Object.defineProperty(xhr, 'responseURL', {
         get: function() {
-          if (mockRule) return _resolveUrl(_url);
+          if (_isMockMode) return _resolveUrl(_url);
           return nativeXhr.responseURL;
         },
         configurable: true
@@ -511,7 +742,7 @@
           },
           set: function(fn) {
             _onProps[prop] = fn;
-            if (!mockRule) {
+            if (!_isMockMode) {
               try { nativeXhr[prop] = fn; } catch (e) {}
             }
           },
@@ -521,11 +752,11 @@
 
       Object.defineProperty(xhr, 'timeout', {
         get: function() {
-          if (mockRule) return 0;
+          if (_isMockMode) return 0;
           return nativeXhr.timeout;
         },
         set: function(value) {
-          if (!mockRule) {
+          if (!_isMockMode) {
             nativeXhr.timeout = value;
           }
         },
@@ -534,11 +765,11 @@
 
       Object.defineProperty(xhr, 'withCredentials', {
         get: function() {
-          if (mockRule) return false;
+          if (_isMockMode) return false;
           return nativeXhr.withCredentials;
         },
         set: function(value) {
-          if (!mockRule) {
+          if (!_isMockMode) {
             nativeXhr.withCredentials = value;
           }
         },
@@ -641,10 +872,15 @@
         }
       }
 
-      var mockRule = _findMockRule(url, method);
+      var requestInfo = {
+        query: _parseQueryParams(url),
+        headers: requestData.headers,
+        body: requestData.requestBody
+      };
+      var mockRule = _findMockRule(url, method, requestInfo);
 
       if (mockRule) {
-        var mockData = _createMockResponse(mockRule);
+        var mockData = _createMockResponse(mockRule, requestInfo);
         requestData.isMocked = true;
         requestData.mockId = mockData.mockId;
         requestData.mockName = mockData.mockName;

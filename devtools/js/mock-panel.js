@@ -46,9 +46,15 @@ const MockPanel = {
 
     const html = this.mocks.map(mock => {
       const isSelected = this.selectedMock?.id === mock.id;
+      const condCount = (Object.keys(mock.matchQuery || {}).length)
+        + (Object.keys(mock.matchHeaders || {}).length)
+        + (Object.keys(mock.matchBody || {}).length);
       return `
         <div class="mock-list-item ${isSelected ? 'selected' : ''}" data-id="${mock.id}">
-          <div class="mock-item-title">${App.escapeHtml(mock.name || '未命名 Mock')}</div>
+          <div class="mock-item-title">
+            ${App.escapeHtml(mock.name || '未命名 Mock')}
+            ${condCount > 0 ? `<span class="cond-badge" title="${condCount} 个匹配条件">${condCount}</span>` : ''}
+          </div>
           <div class="mock-item-url" title="${App.escapeHtml(mock.urlPattern || '')}">
             <span style="font-weight: 600; color: var(--primary-color); margin-right: 6px;">${mock.method || 'GET'}</span>
             ${App.escapeHtml(mock.urlPattern || '')}
@@ -96,7 +102,10 @@ const MockPanel = {
         data: {}
       },
       delay: 0,
-      description: ''
+      description: '',
+      matchQuery: {},
+      matchHeaders: {},
+      matchBody: {}
     };
 
     this.mocks.unshift(newMock);
@@ -153,6 +162,39 @@ const MockPanel = {
       </div>
 
       <div class="form-group">
+        <label class="form-label" style="display: flex; align-items: center; justify-content: space-between;">
+          <span>匹配条件 - Query 参数</span>
+          <button class="btn btn-sm btn-secondary" id="addQueryCondBtn" type="button">+ 添加</button>
+        </label>
+        <div id="queryConditions" class="condition-list">
+          ${this.renderConditionPairs(mock.matchQuery || {}, 'query')}
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label" style="display: flex; align-items: center; justify-content: space-between;">
+          <span>匹配条件 - 请求头</span>
+          <button class="btn btn-sm btn-secondary" id="addHeaderCondBtn" type="button">+ 添加</button>
+        </label>
+        <div id="headerConditions" class="condition-list">
+          ${this.renderConditionPairs(mock.matchHeaders || {}, 'header')}
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label" style="display: flex; align-items: center; justify-content: space-between;">
+          <span>匹配条件 - 请求体字段（JSON）</span>
+          <button class="btn btn-sm btn-secondary" id="addBodyCondBtn" type="button">+ 添加</button>
+        </label>
+        <div id="bodyConditions" class="condition-list">
+          ${this.renderConditionPairs(mock.matchBody || {}, 'body')}
+        </div>
+        <div style="font-size: 11px; color: var(--text-tertiary); margin-top: 4px;">
+          支持嵌套路径，如 user.id。值为 * 表示只要存在该字段即匹配。
+        </div>
+      </div>
+
+      <div class="form-group">
         <label class="form-label">响应状态码</label>
         <input type="number" class="form-input" id="mockStatusCode" value="${mock.statusCode || 200}" style="width: 120px;">
       </div>
@@ -171,6 +213,17 @@ const MockPanel = {
       <div class="form-group">
         <label class="form-label">响应体（JSON）</label>
         <textarea class="form-textarea" id="mockResponseBody" rows="10" placeholder='{"code": 0, "message": "success"}'>${App.escapeHtml(responseBodyStr)}</textarea>
+        <div class="variable-hints" style="margin-top: 8px; padding: 10px; background: var(--bg-secondary); border-radius: 6px; font-size: 11px; color: var(--text-secondary); line-height: 1.8;">
+          <div style="font-weight: 600; margin-bottom: 4px;">支持动态变量：</div>
+          <div><code style="background: var(--bg-tertiary); padding: 1px 5px; border-radius: 3px;">{{$timestamp}}</code> - 当前时间戳（秒）</div>
+          <div><code style="background: var(--bg-tertiary); padding: 1px 5px; border-radius: 3px;">{{$now}}</code> - 当前 ISO 时间</div>
+          <div><code style="background: var(--bg-tertiary); padding: 1px 5px; border-radius: 3px;">{{$randomId}}</code> - 随机 ID</div>
+          <div><code style="background: var(--bg-tertiary); padding: 1px 5px; border-radius: 3px;">{{$uuid}}</code> - UUID</div>
+          <div><code style="background: var(--bg-tertiary); padding: 1px 5px; border-radius: 3px;">{{$random(6)}}</code> - 指定长度随机数字</div>
+          <div><code style="background: var(--bg-tertiary); padding: 1px 5px; border-radius: 3px;">{{query.userId}}</code> - 读取 Query 参数</div>
+          <div><code style="background: var(--bg-tertiary); padding: 1px 5px; border-radius: 3px;">{{header.Authorization}}</code> - 读取请求头</div>
+          <div><code style="background: var(--bg-tertiary); padding: 1px 5px; border-radius: 3px;">{{body.user.id}}</code> - 读取请求体字段</div>
+        </div>
       </div>
 
       <div class="form-group">
@@ -186,6 +239,94 @@ const MockPanel = {
     `;
 
     this.bindEditorEvents();
+  },
+
+  renderConditionPairs(conditions, type) {
+    const entries = Object.entries(conditions || {});
+    if (entries.length === 0) {
+      return `<div style="font-size: 11px; color: var(--text-tertiary); padding: 8px 0;">暂无条件，点击添加按钮配置</div>`;
+    }
+    return entries.map(([key, value], idx) => `
+      <div class="condition-pair" data-type="${type}" data-idx="${idx}">
+        <input type="text" class="form-input condition-key" value="${App.escapeHtml(key)}" placeholder="键名" style="flex: 1;">
+        <span style="padding: 0 6px; color: var(--text-tertiary);">=</span>
+        <input type="text" class="form-input condition-value" value="${App.escapeHtml(String(value))}" placeholder="值" style="flex: 1;">
+        <button class="btn btn-sm btn-remove-cond" type="button" title="删除">×</button>
+      </div>
+    `).join('');
+  },
+
+  addCondition(type) {
+    if (!this.editingMock) return;
+    const mapKey = `match${type.charAt(0).toUpperCase() + type.slice(1)}`;
+    if (!this.editingMock[mapKey]) this.editingMock[mapKey] = {};
+    this.editingMock[mapKey]['newKey'] = '';
+    this.refreshConditions(type);
+  },
+
+  refreshConditions(type) {
+    const mapKey = `match${type.charAt(0).toUpperCase() + type.slice(1)}`;
+    const container = document.getElementById(`${type}Conditions`);
+    if (container && this.editingMock) {
+      container.innerHTML = this.renderConditionPairs(this.editingMock[mapKey] || {}, type);
+      this.bindConditionEvents(type);
+    }
+  },
+
+  bindConditionEvents(type) {
+    const container = document.getElementById(`${type}Conditions`);
+    if (!container || !this.editingMock) return;
+
+    const mapKey = `match${type.charAt(0).toUpperCase() + type.slice(1)}`;
+    const pairs = container.querySelectorAll('.condition-pair');
+    const oldKeys = Object.keys(this.editingMock[mapKey] || {});
+    const newConditions = {};
+
+    pairs.forEach((pair, idx) => {
+      const keyInput = pair.querySelector('.condition-key');
+      const valInput = pair.querySelector('.condition-value');
+      const removeBtn = pair.querySelector('.btn-remove-cond');
+
+      const oldKey = oldKeys[idx];
+      if (oldKey !== undefined && keyInput.value === '' && oldKey !== 'newKey') {
+        keyInput.value = oldKey;
+        const oldVal = this.editingMock[mapKey][oldKey];
+        if (oldVal !== undefined) valInput.value = String(oldVal);
+      }
+
+      keyInput.addEventListener('input', () => {
+        this._rebuildConditions(type);
+      });
+      valInput.addEventListener('input', () => {
+        this._rebuildConditions(type);
+      });
+      if (removeBtn) {
+        removeBtn.addEventListener('click', () => {
+          const keys = Object.keys(this.editingMock[mapKey] || {});
+          const keyToDelete = keys[idx];
+          if (keyToDelete !== undefined) {
+            delete this.editingMock[mapKey][keyToDelete];
+            this.refreshConditions(type);
+          }
+        });
+      }
+    });
+  },
+
+  _rebuildConditions(type) {
+    if (!this.editingMock) return;
+    const mapKey = `match${type.charAt(0).toUpperCase() + type.slice(1)}`;
+    const container = document.getElementById(`${type}Conditions`);
+    if (!container) return;
+
+    const pairs = container.querySelectorAll('.condition-pair');
+    const newConditions = {};
+    pairs.forEach(pair => {
+      const key = pair.querySelector('.condition-key').value.trim();
+      const val = pair.querySelector('.condition-value').value;
+      if (key) newConditions[key] = val;
+    });
+    this.editingMock[mapKey] = newConditions;
   },
 
   bindEditorEvents() {
@@ -281,6 +422,32 @@ const MockPanel = {
     if (deleteBtn) {
       deleteBtn.addEventListener('click', () => this.deleteMock());
     }
+
+    const addQueryBtn = document.getElementById('addQueryCondBtn');
+    if (addQueryBtn) {
+      addQueryBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        this.addCondition('query');
+      });
+    }
+    const addHeaderBtn = document.getElementById('addHeaderCondBtn');
+    if (addHeaderBtn) {
+      addHeaderBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        this.addCondition('header');
+      });
+    }
+    const addBodyBtn = document.getElementById('addBodyCondBtn');
+    if (addBodyBtn) {
+      addBodyBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        this.addCondition('body');
+      });
+    }
+
+    this.bindConditionEvents('query');
+    this.bindConditionEvents('header');
+    this.bindConditionEvents('body');
   },
 
   async saveMock() {

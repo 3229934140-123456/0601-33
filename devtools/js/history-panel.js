@@ -3,6 +3,9 @@ const HistoryPanel = {
   favorites: [],
   compareSelection: [],
   maxHistory: 200,
+  viewMode: 'list',
+  selectedGroup: null,
+  groupedCache: null,
 
   init() {
     this.bindEvents();
@@ -19,6 +22,11 @@ const HistoryPanel = {
     const clearHistoryBtn = document.getElementById('clearHistoryBtn');
     if (clearHistoryBtn) {
       clearHistoryBtn.addEventListener('click', () => this.clearHistory());
+    }
+
+    const toggleViewBtn = document.getElementById('toggleViewGroupBtn');
+    if (toggleViewBtn) {
+      toggleViewBtn.addEventListener('click', () => this.toggleViewMode());
     }
   },
 
@@ -53,6 +61,15 @@ const HistoryPanel = {
   renderHistoryList() {
     const listEl = document.getElementById('historyList');
     if (!listEl) return;
+
+    if (this.viewMode === 'grouped') {
+      if (this.selectedGroup) {
+        this.renderGroupDetail(listEl);
+      } else {
+        this.renderGroupedList(listEl);
+      }
+      return;
+    }
 
     if (this.requests.length === 0) {
       listEl.innerHTML = `
@@ -105,6 +122,197 @@ const HistoryPanel = {
         this.viewRequestDetail(req);
       });
     });
+  },
+
+  groupRequests() {
+    const groups = {};
+    this.requests.forEach(req => {
+      const key = `${req.method || 'GET'}::${Utils.getUrlPath(req.url)}`;
+      if (!groups[key]) {
+        groups[key] = {
+          key,
+          method: req.method || 'GET',
+          url: req.url,
+          urlPath: Utils.getUrlPath(req.url),
+          requests: []
+        };
+      }
+      groups[key].requests.push(req);
+    });
+
+    return Object.values(groups).sort((a, b) => {
+      const aLatest = a.requests[0]?.startTime || 0;
+      const bLatest = b.requests[0]?.startTime || 0;
+      return bLatest - aLatest;
+    });
+  },
+
+  renderGroupedList(container) {
+    const groups = this.groupRequests();
+    this.groupedCache = groups;
+
+    if (groups.length === 0) {
+      container.innerHTML = `
+        <div class="empty-state" style="height: 200px;">
+          <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+            <circle cx="12" cy="12" r="10"/>
+            <polyline points="12 6 12 12 16 14"/>
+          </svg>
+          <p>暂无历史记录</p>
+        </div>
+      `;
+      return;
+    }
+
+    const html = groups.map(group => {
+      const successCount = group.requests.filter(r => (r.status || 0) >= 200 && (r.status || 0) < 400).length;
+      const avgDuration = group.requests.length > 0
+        ? Math.round(group.requests.reduce((sum, r) => sum + (r.duration || 0), 0) / group.requests.length)
+        : 0;
+
+      return `
+        <div class="history-group-item" data-key="${group.key}">
+          <div class="history-group-header">
+            <span class="method-badge method-${group.method.toLowerCase()}">${group.method}</span>
+            <div class="history-group-url" title="${App.escapeHtml(group.url)}">
+              ${App.escapeHtml(group.urlPath)}
+            </div>
+            <span class="history-group-count">${group.requests.length} 次</span>
+            <svg class="group-arrow" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polyline points="9 18 15 12 9 6"/>
+            </svg>
+          </div>
+          <div class="history-group-meta">
+            <span style="color: var(--success-color);">成功 ${successCount}</span>
+            <span style="color: var(--text-tertiary);">平均 ${Utils.formatDuration(avgDuration)}</span>
+            <span style="color: var(--text-tertiary);">
+              最近 ${Utils.formatTime(group.requests[0]?.startTime || 0)}
+            </span>
+          </div>
+        </div>
+      `;
+    }).join('');
+
+    container.innerHTML = html;
+
+    container.querySelectorAll('.history-group-item').forEach(item => {
+      item.addEventListener('click', () => {
+        const key = item.dataset.key;
+        const group = this.groupedCache.find(g => g.key === key);
+        if (group) {
+          this.selectedGroup = group;
+          this.compareSelection = [];
+          this.renderHistoryList();
+        }
+      });
+    });
+  },
+
+  renderGroupDetail(container) {
+    const group = this.selectedGroup;
+    if (!group) return;
+
+    const headerHtml = `
+      <div class="group-detail-header">
+        <button class="btn btn-sm btn-secondary back-btn" onclick="HistoryPanel.backToGroups()">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle;">
+            <polyline points="15 18 9 12 15 6"/>
+          </svg>
+          返回分组
+        </button>
+        <div style="flex: 1; min-width: 0;">
+          <div class="group-detail-title">
+            <span class="method-badge method-${group.method.toLowerCase()}">${group.method}</span>
+            <span title="${App.escapeHtml(group.url)}">${App.escapeHtml(group.urlPath)}</span>
+          </div>
+          <div style="font-size: 11px; color: var(--text-tertiary); margin-top: 2px;">
+            共 ${group.requests.length} 条记录
+            ${this.compareSelection.length > 0 ? ` · 已选 ${this.compareSelection.length} 条` : ''}
+          </div>
+        </div>
+        <button class="btn btn-sm btn-primary compare-in-group-btn" 
+          onclick="event.stopPropagation(); HistoryPanel.compareFromGroup()"
+          ${this.compareSelection.length < 2 ? 'disabled' : ''}>
+          比较选中
+        </button>
+      </div>
+    `;
+
+    const itemsHtml = group.requests.map((req, idx) => {
+      const isInCompare = this.compareSelection.some(s => s.id === req.id);
+      const statusClass = (req.status || 0) >= 200 && (req.status || 0) < 400 ? 'status-success' : 'status-error';
+
+      return `
+        <div class="history-item ${isInCompare ? 'compare-selected' : ''}" data-id="${req.id}" data-idx="${idx}">
+          <div class="history-item-checkbox" onclick="event.stopPropagation(); HistoryPanel.toggleGroupCompare('${req.id}')">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="${isInCompare ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="2">
+              <polyline points="20 6 9 17 4 12"/>
+            </svg>
+          </div>
+          <div class="history-item-info" style="flex: 1;">
+            <div class="history-item-meta" style="font-size: 11px;">
+              <span>${Utils.formatTime(req.startTime || Date.now())}</span>
+              <span class="${statusClass}" style="font-weight: 600;">${req.status || 'pending'}</span>
+              <span>${Utils.formatDuration(req.duration || 0)}</span>
+              ${req.isMocked ? '<span style="color: var(--info-color);">Mock</span>' : ''}
+            </div>
+          </div>
+          <button class="action-btn" onclick="event.stopPropagation(); HistoryPanel.viewRequestDetailById('${req.id}')" title="查看详情">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+              <circle cx="12" cy="12" r="3"/>
+            </svg>
+          </button>
+        </div>
+      `;
+    }).join('');
+
+    container.innerHTML = headerHtml + `<div class="group-request-list">${itemsHtml}</div>`;
+
+    container.querySelectorAll('.history-item').forEach(item => {
+      item.addEventListener('click', () => {
+        const id = item.dataset.id;
+        this.toggleGroupCompare(id);
+      });
+    });
+  },
+
+  toggleGroupCompare(reqId) {
+    const req = this.requests.find(r => r.id === reqId);
+    if (!req) return;
+
+    const idx = this.compareSelection.findIndex(s => s.id === reqId);
+    if (idx >= 0) {
+      this.compareSelection.splice(idx, 1);
+    } else {
+      this.compareSelection.push(req);
+    }
+    this.renderHistoryList();
+  },
+
+  compareFromGroup() {
+    if (this.compareSelection.length < 2) {
+      App.showToast('请选择两个请求进行比较', 'error');
+      return;
+    }
+    this.compareResponses();
+  },
+
+  backToGroups() {
+    this.selectedGroup = null;
+    this.compareSelection = [];
+    this.renderHistoryList();
+  },
+
+  viewRequestDetailById(reqId) {
+    const req = this.requests.find(r => r.id === reqId);
+    if (req) this.viewRequestDetail(req);
+  },
+
+  toggleViewMode() {
+    this.viewMode = this.viewMode === 'list' ? 'grouped' : 'list';
+    this.selectedGroup = null;
+    this.renderHistoryList();
   },
 
   renderFavoritesList() {

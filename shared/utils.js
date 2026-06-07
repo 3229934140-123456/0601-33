@@ -70,6 +70,126 @@ const Utils = {
     }
   },
 
+  parseQueryParams(url) {
+    const params = {};
+    try {
+      const u = new URL(url);
+      u.searchParams.forEach((value, key) => {
+        if (params[key] !== undefined) {
+          if (Array.isArray(params[key])) {
+            params[key].push(value);
+          } else {
+            params[key] = [params[key], value];
+          }
+        } else {
+          params[key] = value;
+        }
+      });
+    } catch (e) {}
+    return params;
+  },
+
+  parseCookieHeader(cookieStr) {
+    const cookies = {};
+    if (!cookieStr) return cookies;
+    const pairs = cookieStr.split(';');
+    for (const pair of pairs) {
+      const idx = pair.indexOf('=');
+      if (idx > 0) {
+        const key = pair.substring(0, idx).trim();
+        const value = pair.substring(idx + 1).trim();
+        if (key) {
+          cookies[key] = decodeURIComponent(value);
+        }
+      }
+    }
+    return cookies;
+  },
+
+  parseContentType(contentType) {
+    if (!contentType) return null;
+    const parts = contentType.split(';');
+    const result = {
+      mimeType: parts[0]?.trim() || '',
+      params: {}
+    };
+    for (let i = 1; i < parts.length; i++) {
+      const param = parts[i].trim();
+      const eqIdx = param.indexOf('=');
+      if (eqIdx > 0) {
+        const key = param.substring(0, eqIdx).trim();
+        const value = param.substring(eqIdx + 1).trim().replace(/^["']|["']$/g, '');
+        result.params[key] = value;
+      }
+    }
+    return result;
+  },
+
+  renderMockTemplate(template, context) {
+    if (!template || typeof template !== 'string') return template;
+
+    const ctx = context || {};
+    const query = ctx.query || {};
+    const headers = ctx.headers || {};
+    const body = ctx.body || {};
+
+    const getByPath = (obj, path) => {
+      if (!obj || !path) return undefined;
+      const parts = path.split('.');
+      let current = obj;
+      for (const part of parts) {
+        if (current === null || current === undefined) return undefined;
+        if (typeof current === 'object') {
+          const lowerKey = Object.keys(current).find(k => k.toLowerCase() === part.toLowerCase());
+          current = lowerKey ? current[lowerKey] : undefined;
+        } else {
+          return undefined;
+        }
+      }
+      return current;
+    };
+
+    let result = template;
+
+    result = result.replace(/\{\{\s*\$timestamp\s*\}\}/g, () => Math.floor(Date.now() / 1000).toString());
+    result = result.replace(/\{\{\s*\$now\s*\}\}/g, () => new Date().toISOString());
+    result = result.replace(/\{\{\s*\$randomId\s*\}\}/g, () =>
+      Date.now().toString(36) + Math.random().toString(36).substr(2, 9)
+    );
+    result = result.replace(/\{\{\s*\$random\((\d+)\)\s*\}\}/g, (_, digits) => {
+      const len = parseInt(digits) || 6;
+      let num = '';
+      for (let i = 0; i < len; i++) {
+        num += Math.floor(Math.random() * 10);
+      }
+      return num;
+    });
+    result = result.replace(/\{\{\s*\$uuid\s*\}\}/g, () =>
+      'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+        const r = Math.random() * 16 | 0;
+        const v = c === 'x' ? r : (r & 0x3 | 0x8);
+        return v.toString(16);
+      })
+    );
+
+    result = result.replace(/\{\{\s*query\.([\w.]+)\s*\}\}/g, (_, key) => {
+      const val = getByPath(query, key);
+      return val !== undefined ? String(val) : '';
+    });
+
+    result = result.replace(/\{\{\s*header\.([\w.]+)\s*\}\}/gi, (_, key) => {
+      const val = getByPath(headers, key);
+      return val !== undefined ? String(val) : '';
+    });
+
+    result = result.replace(/\{\{\s*body\.([\w.]+)\s*\}\}/g, (_, key) => {
+      const val = getByPath(body, key);
+      return val !== undefined ? String(val) : '';
+    });
+
+    return result;
+  },
+
   getMethodColor(method) {
     const colors = {
       GET: '#22c55e',
