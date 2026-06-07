@@ -46,7 +46,7 @@
       var regexPattern = _escapeRegExp(pattern)
         .replace(/\*/g, '.*')
         .replace(/\?/g, '.');
-      var regex = new RegExp('^' + regexPattern + '$');
+      var regex = new RegExp('^' + regexPattern + '$', 'i');
       return regex.test(url);
     } catch (e) {
       return false;
@@ -69,6 +69,32 @@
     return null;
   };
 
+  var _normalizeHeaders = function(headers) {
+    var result = {};
+    if (!headers) return result;
+    for (var key in headers) {
+      if (Object.prototype.hasOwnProperty.call(headers, key)) {
+        result[key.toLowerCase()] = headers[key];
+      }
+    }
+    return result;
+  };
+
+  var _getHeaderCaseInsensitive = function(headers, name) {
+    if (!headers || !name) return null;
+    return headers[name.toLowerCase()] || null;
+  };
+
+  var _headersToString = function(headers) {
+    var lines = [];
+    for (var key in headers) {
+      if (Object.prototype.hasOwnProperty.call(headers, key)) {
+        lines.push(key + ': ' + headers[key]);
+      }
+    }
+    return lines.join('\r\n');
+  };
+
   var _createMockResponse = function(mock) {
     var status = mock.statusCode || 200;
     var statusText = mock.statusText || 'OK';
@@ -89,22 +115,6 @@
     };
   };
 
-  var _parseHeaders = function(headersStr) {
-    var headers = {};
-    if (!headersStr) return headers;
-    var lines = headersStr.split('\r\n');
-    for (var i = 0; i < lines.length; i++) {
-      var line = lines[i];
-      var idx = line.indexOf(':');
-      if (idx > 0) {
-        var name = line.substring(0, idx).trim();
-        var value = line.substring(idx + 1).trim();
-        headers[name] = value;
-      }
-    }
-    return headers;
-  };
-
   var _parseResponseBody = function(bodyText, contentType) {
     if (!bodyText) return null;
     var ct = contentType || '';
@@ -121,108 +131,170 @@
     }
   };
 
-  var _interceptXHR = function() {
-    var OriginalXHR = window.XMLHttpRequest;
+  var _parseHeadersFromString = function(headersStr) {
+    var headers = {};
+    if (!headersStr) return headers;
+    var lines = headersStr.split('\r\n');
+    for (var i = 0; i < lines.length; i++) {
+      var line = lines[i];
+      if (!line) continue;
+      var idx = line.indexOf(':');
+      if (idx > 0) {
+        var name = line.substring(0, idx).trim();
+        var value = line.substring(idx + 1).trim();
+        headers[name] = value;
+      }
+    }
+    return headers;
+  };
 
-    function PatchedXHR() {
-      var xhr = new OriginalXHR();
+  var _interceptXHR = function() {
+    var NativeXHR = window.XMLHttpRequest;
+
+    function DebugXHR() {
+      var nativeXhr = new NativeXHR();
       var requestData = {
         id: _generateId(),
         type: 'xhr',
-        startTime: Date.now(),
+        startTime: 0,
         headers: {},
         requestBody: null,
         isMocked: false
       };
 
-      var mockResponse = null;
+      var mockRule = null;
+      var mockData = null;
+
+      var _isMockMode = false;
+      var _opened = false;
+
       var _method = 'GET';
       var _url = '';
-      var _async = true;
-      var _responseText = '';
-      var _status = 0;
-      var _statusText = '';
-      var _readyState = 0;
-      var _responseHeaders = '';
-      var _eventListeners = {
-        load: [], error: [], abort: [], readystatechange: [],
-        loadend: [], loadstart: [], progress: []
-      };
+      var _responseType = '';
 
-      var triggerEvent = function(eventName) {
-        var listeners = _eventListeners[eventName] || [];
-        for (var i = 0; i < listeners.length; i++) {
+      var _mockReadyState = 0;
+      var _mockStatus = 0;
+      var _mockStatusText = '';
+      var _mockResponseText = '';
+      var _mockResponse = null;
+      var _mockResponseHeadersStr = '';
+      var _mockResponseHeaders = {};
+
+      var _listeners = {};
+      var _onProps = {};
+
+      var _fireEvent = function(eventName) {
+        var event = {
+          type: eventName,
+          target: xhr,
+          currentTarget: xhr
+        };
+
+        var list = _listeners[eventName];
+        if (list) {
+          for (var i = 0; i < list.length; i++) {
+            try {
+              list[i].call(xhr, event);
+            } catch (e) {
+              setTimeout(function() { throw e; }, 0);
+            }
+          }
+        }
+
+        var handler = _onProps['on' + eventName];
+        if (typeof handler === 'function') {
           try {
-            listeners[i].call(xhr, { type: eventName, target: xhr });
+            handler.call(xhr, event);
           } catch (e) {
-            console.error(e);
+            setTimeout(function() { throw e; }, 0);
           }
         }
-        if (eventName === 'readystatechange' && typeof xhr.onreadystatechange === 'function') {
+      };
+
+      var _setMockReadyState = function(state) {
+        _mockReadyState = state;
+        _fireEvent('readystatechange');
+      };
+
+      var _applyMockResponse = function() {
+        _mockStatus = mockData.status;
+        _mockStatusText = mockData.statusText;
+        _mockResponseText = mockData.body;
+        _mockResponseHeadersStr = _headersToString(mockData.headers);
+        _mockResponseHeaders = _normalizeHeaders(mockData.headers);
+
+        var contentType = _getHeaderCaseInsensitive(_mockResponseHeaders, 'content-type') || '';
+
+        if (_responseType === 'json') {
           try {
-            xhr.onreadystatechange.call(xhr, { type: 'readystatechange', target: xhr });
+            _mockResponse = JSON.parse(mockData.body);
           } catch (e) {
-            console.error(e);
+            _mockResponse = null;
           }
+        } else if (_responseType === 'text' || _responseType === '') {
+          _mockResponse = mockData.body;
+        } else {
+          _mockResponse = mockData.body;
         }
+
+        requestData.endTime = Date.now();
+        requestData.duration = requestData.endTime - requestData.startTime;
+        requestData.status = _mockStatus;
+        requestData.statusText = _mockStatusText;
+        requestData.responseHeaders = mockData.headers;
+        requestData.responseSize = mockData.body.length;
+        requestData.responseBody = _parseResponseBody(mockData.body, contentType);
+        requestData.isMocked = true;
+        requestData.mockId = mockData.mockId;
+        requestData.mockName = mockData.mockName;
+
+        _reportRequest(requestData);
       };
 
-      Object.defineProperty(xhr, 'readyState', { get: function() { return _readyState; } });
-      Object.defineProperty(xhr, 'status', { get: function() { return _status; } });
-      Object.defineProperty(xhr, 'statusText', { get: function() { return _statusText; } });
-      Object.defineProperty(xhr, 'responseText', { get: function() { return _responseText; } });
-      Object.defineProperty(xhr, 'response', { get: function() { return _responseText; } });
+      var _runMock = function() {
+        _isMockMode = true;
+        _setMockReadyState(1);
 
-      var originalAddEventListener = xhr.addEventListener;
-      xhr.addEventListener = function(event, callback) {
-        if (_eventListeners[event]) {
-          _eventListeners[event].push(callback);
-        }
-        if (originalAddEventListener) {
-          return originalAddEventListener.apply(this, arguments);
-        }
+        setTimeout(function() {
+          _setMockReadyState(2);
+          _fireEvent('loadstart');
+          _fireEvent('progress');
+          _setMockReadyState(3);
+          _fireEvent('progress');
+          _applyMockResponse();
+          _setMockReadyState(4);
+          _fireEvent('load');
+          _fireEvent('loadend');
+        }, mockData.delay);
       };
 
-      var originalOn = {};
-      ['load', 'error', 'abort', 'readystatechange', 'loadend', 'loadstart', 'progress'].forEach(function(ev) {
-        Object.defineProperty(xhr, 'on' + ev, {
-          get: function() { return originalOn['on' + ev] || null; },
-          set: function(fn) {
-            originalOn['on' + ev] = fn;
-            if (fn) _eventListeners[ev].push(fn);
-          }
-        });
-      });
+      var xhr = Object.create(NativeXHR.prototype);
 
-      var originalOpen = xhr.open;
       xhr.open = function(method, url, async, user, password) {
-        _method = method;
-        _url = url;
-        _async = async !== false;
-        requestData.method = method;
-        requestData.url = url;
+        _method = method || 'GET';
+        _url = url || '';
+        _opened = true;
+        requestData.method = _method;
+        requestData.url = _url;
 
-        mockResponse = _findMockRule(url, method);
-
-        if (mockResponse) {
-          _readyState = 1;
-          triggerEvent('readystatechange');
+        mockRule = _findMockRule(_url, _method);
+        if (mockRule) {
+          mockData = _createMockResponse(mockRule);
+          requestData.startTime = Date.now();
           return;
         }
 
-        return originalOpen.apply(this, arguments);
+        return nativeXhr.open.apply(nativeXhr, arguments);
       };
 
-      var originalSetRequestHeader = xhr.setRequestHeader;
       xhr.setRequestHeader = function(name, value) {
         requestData.headers[name] = value;
-        if (mockResponse) return;
-        return originalSetRequestHeader.apply(this, arguments);
+        if (mockRule) return;
+        return nativeXhr.setRequestHeader.apply(nativeXhr, arguments);
       };
 
-      var originalSend = xhr.send;
       xhr.send = function(body) {
-        if (body) {
+        if (body !== undefined && body !== null) {
           try {
             if (typeof body === 'string') {
               try {
@@ -232,134 +304,263 @@
               }
             } else if (body instanceof FormData) {
               requestData.requestBody = '[FormData]';
+            } else if (body instanceof Blob) {
+              requestData.requestBody = '[Blob: ' + body.size + ' bytes]';
             } else {
-              requestData.requestBody = '[Body]';
+              try {
+                requestData.requestBody = body.toString();
+              } catch (e) {
+                requestData.requestBody = '[Body]';
+              }
             }
           } catch (e) {
-            requestData.requestBody = body;
+            requestData.requestBody = null;
           }
         }
 
-        if (mockResponse) {
-          var mockData = _createMockResponse(mockResponse);
-          requestData.isMocked = true;
-          requestData.mockId = mockData.mockId;
-          requestData.mockName = mockData.mockName;
-
-          setTimeout(function() {
-            _status = mockData.status;
-            _statusText = mockData.statusText;
-            _responseText = mockData.body;
-            var headerPairs = [];
-            for (var k in mockData.headers) {
-              if (Object.prototype.hasOwnProperty.call(mockData.headers, k)) {
-                headerPairs.push(k + ': ' + mockData.headers[k]);
-              }
-            }
-            _responseHeaders = headerPairs.join('\r\n');
-
-            _readyState = 2;
-            triggerEvent('readystatechange');
-            triggerEvent('loadstart');
-
-            _readyState = 3;
-            triggerEvent('readystatechange');
-            triggerEvent('progress');
-
-            _readyState = 4;
-            requestData.endTime = Date.now();
-            requestData.duration = requestData.endTime - requestData.startTime;
-            requestData.status = _status;
-            requestData.statusText = _statusText;
-            requestData.responseHeaders = mockData.headers;
-            requestData.responseSize = mockData.body.length;
-            requestData.responseBody = _parseResponseBody(mockData.body, mockData.headers['Content-Type'] || mockData.headers['content-type'] || '');
-
-            triggerEvent('readystatechange');
-            triggerEvent('load');
-            triggerEvent('loadend');
-
-            _reportRequest(requestData);
-          }, mockData.delay);
-
+        if (mockRule) {
+          _runMock();
           return;
         }
 
-        var loadHandler = function() {
+        requestData.startTime = Date.now();
+
+        nativeXhr.addEventListener('load', function() {
           requestData.endTime = Date.now();
           requestData.duration = requestData.endTime - requestData.startTime;
-          requestData.status = xhr.status;
-          requestData.statusText = xhr.statusText;
+          requestData.status = nativeXhr.status;
+          requestData.statusText = nativeXhr.statusText;
 
           try {
-            requestData.responseHeaders = _parseHeaders(xhr.getAllResponseHeaders());
+            var headerStr = nativeXhr.getAllResponseHeaders();
+            requestData.responseHeaders = _parseHeadersFromString(headerStr);
           } catch (e) {
             requestData.responseHeaders = {};
           }
 
-          var contentType = requestData.responseHeaders['content-type'] ||
-                            requestData.responseHeaders['Content-Type'] || '';
+          var contentType = '';
+          try {
+            contentType = nativeXhr.getResponseHeader('content-type') || '';
+          } catch (e) {}
           requestData.contentType = contentType;
 
-          var responseText = '';
+          var respText = '';
           try {
-            responseText = xhr.responseText || '';
+            respText = nativeXhr.responseText || '';
           } catch (e) {
-            responseText = '';
+            respText = '';
           }
-
-          requestData.responseSize = responseText ? responseText.length : 0;
-          requestData.responseBody = _parseResponseBody(responseText, contentType);
+          requestData.responseSize = respText ? respText.length : 0;
+          requestData.responseBody = _parseResponseBody(respText, contentType);
 
           _reportRequest(requestData);
-        };
+        });
 
-        var errorHandler = function() {
+        nativeXhr.addEventListener('error', function() {
           requestData.endTime = Date.now();
           requestData.duration = requestData.endTime - requestData.startTime;
           requestData.error = 'Network Error';
           _reportRequest(requestData);
-        };
+        });
 
-        var abortHandler = function() {
+        nativeXhr.addEventListener('abort', function() {
           requestData.endTime = Date.now();
           requestData.duration = requestData.endTime - requestData.startTime;
           requestData.error = 'Aborted';
           _reportRequest(requestData);
-        };
+        });
 
-        xhr.addEventListener('load', loadHandler);
-        xhr.addEventListener('error', errorHandler);
-        xhr.addEventListener('abort', abortHandler);
+        nativeXhr.addEventListener('timeout', function() {
+          requestData.endTime = Date.now();
+          requestData.duration = requestData.endTime - requestData.startTime;
+          requestData.error = 'Timeout';
+          _reportRequest(requestData);
+        });
 
-        return originalSend.apply(this, arguments);
+        return nativeXhr.send.apply(nativeXhr, arguments);
       };
 
-      var originalGetAllResponseHeaders = xhr.getAllResponseHeaders;
-      xhr.getAllResponseHeaders = function() {
-        if (mockResponse) return _responseHeaders;
-        return originalGetAllResponseHeaders.apply(this, arguments);
-      };
-
-      var originalGetResponseHeader = xhr.getResponseHeader;
-      xhr.getResponseHeader = function(name) {
-        if (mockResponse) {
-          var headers = _parseHeaders(_responseHeaders);
-          return headers[name] || headers[name.toLowerCase()] || null;
+      xhr.abort = function() {
+        if (mockRule) {
+          _mockReadyState = 0;
+          _mockStatus = 0;
+          _fireEvent('abort');
+          _fireEvent('loadend');
+          return;
         }
-        return originalGetResponseHeader.apply(this, arguments);
+        return nativeXhr.abort.apply(nativeXhr, arguments);
       };
+
+      xhr.getAllResponseHeaders = function() {
+        if (mockRule && _mockReadyState >= 2) {
+          return _mockResponseHeadersStr;
+        }
+        return nativeXhr.getAllResponseHeaders.apply(nativeXhr, arguments);
+      };
+
+      xhr.getResponseHeader = function(name) {
+        if (mockRule && _mockReadyState >= 2) {
+          return _getHeaderCaseInsensitive(_mockResponseHeaders, name);
+        }
+        return nativeXhr.getResponseHeader.apply(nativeXhr, arguments);
+      };
+
+      xhr.overrideMimeType = function(mimetype) {
+        if (mockRule) return;
+        return nativeXhr.overrideMimeType.apply(nativeXhr, arguments);
+      };
+
+      xhr.addEventListener = function(type, listener, options) {
+        if (!_listeners[type]) {
+          _listeners[type] = [];
+        }
+        if (_listeners[type].indexOf(listener) === -1) {
+          _listeners[type].push(listener);
+        }
+        if (mockRule) return;
+        return nativeXhr.addEventListener.apply(nativeXhr, arguments);
+      };
+
+      xhr.removeEventListener = function(type, listener, options) {
+        if (_listeners[type]) {
+          var idx = _listeners[type].indexOf(listener);
+          if (idx >= 0) {
+            _listeners[type].splice(idx, 1);
+          }
+        }
+        if (mockRule) return;
+        return nativeXhr.removeEventListener.apply(nativeXhr, arguments);
+      };
+
+      Object.defineProperty(xhr, 'readyState', {
+        get: function() {
+          if (mockRule) return _mockReadyState;
+          return nativeXhr.readyState;
+        },
+        configurable: true
+      });
+
+      Object.defineProperty(xhr, 'status', {
+        get: function() {
+          if (mockRule && _mockReadyState >= 2) return _mockStatus;
+          return nativeXhr.status;
+        },
+        configurable: true
+      });
+
+      Object.defineProperty(xhr, 'statusText', {
+        get: function() {
+          if (mockRule && _mockReadyState >= 2) return _mockStatusText;
+          return nativeXhr.statusText;
+        },
+        configurable: true
+      });
+
+      Object.defineProperty(xhr, 'responseText', {
+        get: function() {
+          if (mockRule && _mockReadyState >= 3) return _mockResponseText;
+          return nativeXhr.responseText;
+        },
+        configurable: true
+      });
+
+      Object.defineProperty(xhr, 'response', {
+        get: function() {
+          if (mockRule && _mockReadyState >= 3) {
+            return _mockResponse !== null ? _mockResponse : _mockResponseText;
+          }
+          return nativeXhr.response;
+        },
+        configurable: true
+      });
+
+      Object.defineProperty(xhr, 'responseType', {
+        get: function() {
+          if (mockRule) return _responseType;
+          return nativeXhr.responseType;
+        },
+        set: function(value) {
+          _responseType = value;
+          if (!mockRule) {
+            try { nativeXhr.responseType = value; } catch (e) {}
+          }
+        },
+        configurable: true
+      });
+
+      Object.defineProperty(xhr, 'responseURL', {
+        get: function() {
+          if (mockRule) return _resolveUrl(_url);
+          return nativeXhr.responseURL;
+        },
+        configurable: true
+      });
+
+      if (nativeXhr.upload) {
+        Object.defineProperty(xhr, 'upload', {
+          get: function() { return nativeXhr.upload; },
+          configurable: true
+        });
+      }
+
+      ['onreadystatechange', 'onloadstart', 'onprogress', 'onabort',
+       'onerror', 'onload', 'ontimeout', 'onloadend'].forEach(function(prop) {
+        Object.defineProperty(xhr, prop, {
+          get: function() {
+            return _onProps[prop] || null;
+          },
+          set: function(fn) {
+            _onProps[prop] = fn;
+            if (!mockRule) {
+              try { nativeXhr[prop] = fn; } catch (e) {}
+            }
+          },
+          configurable: true
+        });
+      });
+
+      Object.defineProperty(xhr, 'timeout', {
+        get: function() {
+          if (mockRule) return 0;
+          return nativeXhr.timeout;
+        },
+        set: function(value) {
+          if (!mockRule) {
+            nativeXhr.timeout = value;
+          }
+        },
+        configurable: true
+      });
+
+      Object.defineProperty(xhr, 'withCredentials', {
+        get: function() {
+          if (mockRule) return false;
+          return nativeXhr.withCredentials;
+        },
+        set: function(value) {
+          if (!mockRule) {
+            nativeXhr.withCredentials = value;
+          }
+        },
+        configurable: true
+      });
 
       return xhr;
     }
 
-    PatchedXHR.prototype = OriginalXHR.prototype;
-    PatchedXHR.DONE = 4;
-    PatchedXHR.HEADERS_RECEIVED = 2;
-    PatchedXHR.LOADING = 3;
-    PatchedXHR.OPENED = 1;
-    PatchedXHR.UNSENT = 0;
-    window.XMLHttpRequest = PatchedXHR;
+    DebugXHR.prototype = NativeXHR.prototype;
+    DebugXHR.DONE = 4;
+    DebugXHR.HEADERS_RECEIVED = 2;
+    DebugXHR.LOADING = 3;
+    DebugXHR.OPENED = 1;
+    DebugXHR.UNSENT = 0;
+
+    Object.defineProperty(DebugXHR, 'prototype', {
+      value: NativeXHR.prototype,
+      writable: false
+    });
+
+    window.XMLHttpRequest = DebugXHR;
     window.XMLHttpRequest.DONE = 4;
     window.XMLHttpRequest.HEADERS_RECEIVED = 2;
     window.XMLHttpRequest.LOADING = 3;
@@ -426,8 +627,14 @@
             }
           } else if (init.body instanceof FormData) {
             requestData.requestBody = '[FormData]';
+          } else if (init.body instanceof Blob) {
+            requestData.requestBody = '[Blob: ' + init.body.size + ' bytes]';
           } else {
-            requestData.requestBody = '[Body]';
+            try {
+              requestData.requestBody = init.body.toString();
+            } catch (e) {
+              requestData.requestBody = '[Body]';
+            }
           }
         } catch (e) {
           requestData.requestBody = null;
@@ -445,14 +652,27 @@
         return new Promise(function(resolve) {
           setTimeout(function() {
             var responseBody = mockData.body;
-            var initObj = {
-              status: mockData.status,
-              statusText: mockData.statusText,
-              headers: mockData.headers,
-              url: url
-            };
+            var headersObj = {};
+            for (var hk in mockData.headers) {
+              if (Object.prototype.hasOwnProperty.call(mockData.headers, hk)) {
+                headersObj[hk] = mockData.headers[hk];
+              }
+            }
 
-            var response = new Response(responseBody, initObj);
+            var response;
+            try {
+              response = new Response(responseBody, {
+                status: mockData.status,
+                statusText: mockData.statusText,
+                headers: headersObj,
+                url: _resolveUrl(url)
+              });
+            } catch (e) {
+              response = new Response(responseBody, {
+                status: mockData.status,
+                statusText: mockData.statusText
+              });
+            }
 
             requestData.endTime = Date.now();
             requestData.duration = requestData.endTime - requestData.startTime;
@@ -460,7 +680,12 @@
             requestData.statusText = mockData.statusText;
             requestData.responseHeaders = mockData.headers;
             requestData.responseSize = responseBody.length;
-            requestData.responseBody = _parseResponseBody(responseBody, mockData.headers['Content-Type'] || mockData.headers['content-type'] || '');
+
+            var contentType = _getHeaderCaseInsensitive(
+              _normalizeHeaders(mockData.headers),
+              'content-type'
+            ) || '';
+            requestData.responseBody = _parseResponseBody(responseBody, contentType);
 
             _reportRequest(requestData);
 
@@ -512,11 +737,20 @@
           _reportRequest(requestData);
           return response;
         }).catch(function(e) {
-          requestData.responseBody = null;
-          requestData.responseSize = 0;
-          requestData.error = 'Failed to read response body: ' + e.message;
-          _reportRequest(requestData);
-          return response;
+          try {
+            return clonedResponse.arrayBuffer().then(function(buffer) {
+              requestData.responseSize = buffer.byteLength;
+              requestData.responseBody = '[Binary data: ' + buffer.byteLength + ' bytes]';
+              _reportRequest(requestData);
+              return response;
+            });
+          } catch (e2) {
+            requestData.responseBody = null;
+            requestData.responseSize = 0;
+            requestData.error = 'Failed to read response body: ' + e.message;
+            _reportRequest(requestData);
+            return response;
+          }
         });
       }).catch(function(error) {
         requestData.endTime = Date.now();

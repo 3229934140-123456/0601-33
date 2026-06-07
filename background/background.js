@@ -11,8 +11,8 @@ const Background = {
   async init() {
     this.settings = await Storage.getSettings();
     this.setupMessageListeners();
-    this.setupWebRequestListeners();
     this.setupDevToolsConnection();
+    this.updateMockRules();
   },
 
   setupMessageListeners() {
