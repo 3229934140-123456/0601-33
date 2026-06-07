@@ -28,6 +28,10 @@ const RequestPanel = {
     }
   },
 
+  async reloadEnv() {
+    await this.loadEnvironments();
+  },
+
   replaceVariables(str) {
     if (!str || typeof str !== 'string') return str;
     if (!this.currentEnv || !this.currentEnv.variables) return str;

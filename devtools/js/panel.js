@@ -143,6 +143,9 @@ const App = {
         if (typeof EnvPanel !== 'undefined') {
           EnvPanel.loadEnvironments();
         }
+        if (typeof RequestPanel !== 'undefined' && RequestPanel.reloadEnv) {
+          RequestPanel.reloadEnv();
+        }
         break;
       
       case 'COLLECTION_UPDATED':
